@@ -38,33 +38,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
-/* ================= TIME FORMAT (SAFE) ================= */
+/* ================= TIME FORMAT ================= */
 
 function formatTimeHHmm(ts?: any) {
   if (!ts) return "";
-
   const d =
     typeof ts.toDate === "function"
-      ? ts.toDate() // Firestore Timestamp
+      ? ts.toDate()
       : ts instanceof Date
-      ? ts // optimistic Date
+      ? ts
       : null;
-
   if (!d) return "";
-
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-
-  return `${hh}:${mm}`;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes()
+  ).padStart(2, "0")}`;
 }
 
-/* ================= TYPES ================= */
-
-type UIMessage = Message & {
-  _optimistic?: boolean;
-};
-
-/* ================= COMPONENT ================= */
+type UIMessage = Message & { _optimistic?: boolean };
 
 export default function ChatConversationPage() {
   const { id: chatId } = useParams<{ id: string }>();
@@ -93,6 +83,10 @@ export default function ChatConversationPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /* 🔑 SCROLL FIX REFS */
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+
   /* ================= AUTH ================= */
 
   useEffect(() => {
@@ -109,7 +103,6 @@ export default function ChatConversationPage() {
 
   useEffect(() => {
     if (!currentUser) return;
-
     setUserOnline(currentUser.id);
 
     const goOffline = () => setUserOffline(currentUser.id);
@@ -127,7 +120,6 @@ export default function ChatConversationPage() {
 
   useEffect(() => {
     if (!otherUser) return;
-
     return subscribeToPresence(otherUser.id, (p) => {
       setIsOnline(p.online);
       setLastSeen(p.lastSeen);
@@ -145,7 +137,6 @@ export default function ChatConversationPage() {
         router.push("/chat");
         return;
       }
-
       setChat(chatData);
       const otherId = chatData.participants.find(
         (id) => id !== currentUser.id
@@ -154,6 +145,22 @@ export default function ChatConversationPage() {
     })();
   }, [currentUser, chatId, router]);
 
+  /* ================= AUTO SCROLL DETECTION ================= */
+
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      const threshold = 80;
+      shouldAutoScrollRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
   /* ================= MESSAGES ================= */
 
   useEffect(() => {
@@ -161,6 +168,13 @@ export default function ChatConversationPage() {
 
     return subscribeToMessages(chatId, (msgs) => {
       setMessages(msgs as UIMessage[]);
+
+      if (shouldAutoScrollRef.current) {
+        requestAnimationFrame(() => {
+          const el = messagesContainerRef.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
     });
   }, [chatId]);
 
@@ -207,6 +221,11 @@ export default function ChatConversationPage() {
     setText("");
     inputRef.current?.focus();
 
+    requestAnimationFrame(() => {
+      const el = messagesContainerRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+
     await sendMessage(chat.id, currentUser.id, optimistic.text!);
   };
 
@@ -224,8 +243,7 @@ export default function ChatConversationPage() {
   const unlockImage = async (password: string) => {
     if (!selectedMessage || !chat) return;
 
-    const enteredHash = await hashPassword(password);
-    if (enteredHash !== selectedMessage.passwordHash) {
+    if ((await hashPassword(password)) !== selectedMessage.passwordHash) {
       alert("Wrong password");
       return;
     }
@@ -256,8 +274,6 @@ export default function ChatConversationPage() {
     setLastNudgeAt(now);
     await sendNudge(chat.id, currentUser.id, otherUser.id);
   };
-
-  /* ================= RENDER ================= */
 
   if (!currentUser || !chat || !otherUser) {
     return <div className="flex h-dvh items-center justify-center">Loading…</div>;
@@ -311,7 +327,10 @@ export default function ChatConversationPage() {
       )}
 
       {/* MESSAGES */}
-      <div className="overflow-y-auto px-4 py-3 space-y-4">
+      <div
+        ref={messagesContainerRef}
+        className="overflow-y-auto px-4 py-3 space-y-4"
+      >
         {messages.map((msg) => {
           const isOwn = msg.senderId === currentUser.id;
 
