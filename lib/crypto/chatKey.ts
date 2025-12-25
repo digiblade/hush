@@ -1,6 +1,6 @@
 export async function deriveChatKey(chatId: string): Promise<CryptoKey> {
   const enc = new TextEncoder()
-
+debugger
   const baseKey = await crypto.subtle.importKey(
     "raw",
     enc.encode(chatId),

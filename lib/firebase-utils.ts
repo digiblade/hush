@@ -12,8 +12,9 @@ import {
   updateDoc,
   onSnapshot,
   serverTimestamp,
-  type Timestamp,
-  writeBatch
+  Timestamp,
+  writeBatch,
+  deleteDoc
 } from "firebase/firestore"
 
 
@@ -160,9 +161,22 @@ export function subscribeToChats(userId: string, callback: (chats: Chat[]) => vo
 }
 
 // Subscribe to messages in a chat
-export function subscribeToMessages(chatId: string, callback: (messages: Message[]) => void) {
+export function subscribeToMessages(
+  chatId: string,
+  callback: (messages: Message[]) => void
+) {
   const messagesRef = collection(db, "chats", chatId, "messages")
-  const q = query(messagesRef, orderBy("timestamp", "asc"))
+
+  // ⏱️ Only last 5 hours
+  const fiveHoursAgo = Timestamp.fromMillis(
+    Date.now() - 5 * 60 * 60 * 1000
+  )
+
+  const q = query(
+    messagesRef,
+    where("timestamp", ">=", fiveHoursAgo),
+    orderBy("timestamp", "asc")
+  )
 
   return onSnapshot(q, (snapshot) => {
     const messages: Message[] = []
@@ -172,6 +186,7 @@ export function subscribeToMessages(chatId: string, callback: (messages: Message
     callback(messages)
   })
 }
+
 
 // Get chat details
 export async function getChatDetails(chatId: string): Promise<Chat | null> {
@@ -230,4 +245,101 @@ export async function clearChatMessagesClient(chatId: string) {
   const batch = writeBatch(db)
   snapshot.forEach((doc) => batch.delete(doc.ref))
   await batch.commit()
+}
+
+
+
+/* ====== ONLINE STATUS ====== */
+
+export async function setUserOnline(userId: string) {
+  await setDoc(
+    doc(db, "presence", userId),
+    {
+      online: true,
+      lastSeen: serverTimestamp(),
+    },
+    { merge: true }
+  )
+}
+
+export async function setUserOffline(userId: string) {
+  await setDoc(
+    doc(db, "presence", userId),
+    {
+      online: false,
+      lastSeen: serverTimestamp(),
+    },
+    { merge: true }
+  )
+}
+
+export function subscribeToPresence(
+  userId: string,
+  callback: (data: { online: boolean; lastSeen: any }) => void
+) {
+  return onSnapshot(doc(db, "presence", userId), (snap) => {
+    if (snap.exists()) callback(snap.data() as any)
+  })
+}
+
+
+/* ===== NUDGE ===== */
+
+export async function sendNudge(
+  chatId: string,
+  from: string,
+  to: string
+) {
+  await addDoc(collection(db, "chats", chatId, "nudges"), {
+    from,
+    to,
+    createdAt: serverTimestamp(),
+  })
+}
+
+export function subscribeToNudges(
+  chatId: string,
+  userId: string,
+  callback: (fromUserId: string) => void
+) {
+  const q = query(
+    collection(db, "chats", chatId, "nudges"),
+    orderBy("createdAt", "desc")
+  )
+
+  return onSnapshot(q, (snap) => {
+    snap.docChanges().forEach((change) => {
+      const data = change.doc.data()
+      if (change.type === "added" && data.to === userId) {
+        callback(data.from)
+        deleteDoc(
+          doc(db, "chats", chatId, "nudges", change.doc.id)
+        )
+      }
+    })
+  })
+}
+
+
+export function subscribeToBrowserNudges(
+  chatId: string,
+  userId: string,
+  callback: (fromUserId: string) => void
+) {
+  const q = query(
+    collection(db, "chats", chatId, "nudges"),
+    orderBy("createdAt", "desc")
+  )
+
+  return onSnapshot(q, (snap) => {
+    snap.docChanges().forEach((change) => {
+      const data = change.doc.data()
+      if (change.type === "added" && data.to === userId) {
+        callback(data.from)
+
+        // cleanup (important)
+        deleteDoc(doc(db, "chats", chatId, "nudges", change.doc.id))
+      }
+    })
+  })
 }

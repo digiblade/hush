@@ -1,15 +1,15 @@
-"use client"
+"use client";
 
-import type React from "react"
+import type React from "react";
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Search, LogOut, MessageSquare } from "lucide-react"
-import { auth } from "@/lib/firebase"
-import { signOut, onAuthStateChanged } from "firebase/auth"
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Search, LogOut, MessageSquare } from "lucide-react";
+import { auth } from "@/lib/firebase";
+import { signOut, onAuthStateChanged } from "firebase/auth";
 import {
   searchUserByEmail,
   createOrGetChat,
@@ -17,69 +17,74 @@ import {
   getUserProfile,
   type UserProfile,
   type Chat,
-} from "@/lib/firebase-utils"
+} from "@/lib/firebase-utils";
+import { requestNotificationPermission } from "@/lib/utils";
 
 export default function ChatPage() {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
-  const [chats, setChats] = useState<Chat[]>([])
-  const [searchEmail, setSearchEmail] = useState("")
-  const [searchResult, setSearchResult] = useState<UserProfile | null>(null)
-  const [searchError, setSearchError] = useState("")
-  const [loading, setLoading] = useState(false)
-  const router = useRouter()
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [searchEmail, setSearchEmail] = useState("");
+  const [searchResult, setSearchResult] = useState<UserProfile | null>(null);
+  const [searchError, setSearchError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        router.push("/login")
-        return
+        router.push("/login");
+        return;
       }
 
       // Get user profile from Firestore
-      const profile = await getUserProfile(user.uid)
+      const profile = await getUserProfile(user.uid);
       if (profile) {
-        setCurrentUser(profile)
+        setCurrentUser(profile);
       }
-    })
+    });
 
-    return () => unsubscribe()
-  }, [router])
+    return () => unsubscribe();
+  }, [router]);
 
   useEffect(() => {
-    if (!currentUser) return
+    if (!currentUser) return;
 
     const unsubscribe = subscribeToChats(currentUser.id, (updatedChats) => {
-      setChats(updatedChats)
-    })
+      setChats(updatedChats);
+    });
 
-    return () => unsubscribe()
-  }, [currentUser])
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  useEffect(() => {
+    requestNotificationPermission();
+  }, []);
 
   const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSearchError("")
-    setSearchResult(null)
-    setLoading(true)
+    e.preventDefault();
+    setSearchError("");
+    setSearchResult(null);
+    setLoading(true);
 
     try {
-      const user = await searchUserByEmail(searchEmail.trim())
+      const user = await searchUserByEmail(searchEmail.trim());
 
       if (user && user.id !== currentUser?.id) {
-        setSearchResult(user)
+        setSearchResult(user);
       } else if (user && user.id === currentUser?.id) {
-        setSearchError("You cannot chat with yourself")
+        setSearchError("You cannot chat with yourself");
       } else {
-        setSearchError("No user found with that email")
+        setSearchError("No user found with that email");
       }
     } catch (error) {
-      setSearchError("Failed to search user")
+      setSearchError("Failed to search user");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const startChat = async (user: UserProfile) => {
-    if (!currentUser) return
+    if (!currentUser) return;
 
     try {
       const chatId = await createOrGetChat(
@@ -88,23 +93,23 @@ export default function ChatPage() {
         currentUser.email,
         user.id,
         user.name,
-        user.email,
-      )
+        user.email
+      );
 
-      router.push(`/chat/${chatId}`)
+      router.push(`/chat/${chatId}`);
     } catch (error) {
-      setSearchError("Failed to start chat")
+      setSearchError("Failed to start chat");
     }
-  }
+  };
 
   const handleLogout = async () => {
     try {
-      await signOut(auth)
-      router.push("/login")
+      await signOut(auth);
+      router.push("/login");
     } catch (error) {
-      console.error("Failed to log out:", error)
+      console.error("Failed to log out:", error);
     }
-  }
+  };
 
   const getInitials = (name: string) => {
     return name
@@ -112,13 +117,12 @@ export default function ChatPage() {
       .map((n) => n[0])
       .join("")
       .toUpperCase()
-      .slice(0, 2)
-  }
+      .slice(0, 2);
+  };
 
   if (!currentUser) {
-    return null
+    return null;
   }
-  
 
   return (
     <div className="flex min-h-screen flex-col bg-(--color-background)">
@@ -164,7 +168,9 @@ export default function ChatPage() {
             </Button>
           </div>
 
-          {searchError && <div className="text-sm text-(--color-error)">{searchError}</div>}
+          {searchError && (
+            <div className="text-sm text-(--color-error)">{searchError}</div>
+          )}
 
           {searchResult && (
             <div
@@ -177,10 +183,17 @@ export default function ChatPage() {
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-(--color-text)">{searchResult.name}</div>
-                <div className="text-sm text-(--color-text-muted) truncate">{searchResult.email}</div>
+                <div className="font-medium text-(--color-text)">
+                  {searchResult.name}
+                </div>
+                <div className="text-sm text-(--color-text-muted) truncate">
+                  {searchResult.email}
+                </div>
               </div>
-              <Button size="sm" className="bg-(--color-primary) hover:bg-(--color-primary-dark) text-white">
+              <Button
+                size="sm"
+                className="bg-(--color-primary) hover:bg-(--color-primary-dark) text-white"
+              >
                 Chat
               </Button>
             </div>
@@ -200,9 +213,15 @@ export default function ChatPage() {
         ) : (
           <div className="divide-y divide-(--color-border)">
             {chats.map((chat) => {
-              const otherUserId = chat.participants.find((id) => id !== currentUser.id)
-              const otherUserName = otherUserId ? chat.participantNames[otherUserId] : "Unknown"
-              const otherUserEmail = otherUserId ? chat.participantEmails[otherUserId] : ""
+              const otherUserId = chat.participants.find(
+                (id) => id !== currentUser.id
+              );
+              const otherUserName = otherUserId
+                ? chat.participantNames[otherUserId]
+                : "Unknown";
+              const otherUserEmail = otherUserId
+                ? chat.participantEmails[otherUserId]
+                : "";
 
               return (
                 <div
@@ -216,7 +235,9 @@ export default function ChatPage() {
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-(--color-text)">{otherUserName}</div>
+                    <div className="font-medium text-(--color-text)">
+                      {otherUserName}
+                    </div>
                     {/* <div className="text-sm text-(--color-text-muted) truncate">
                       {chat.lastMessage || "No messages yet"}
                     </div> */}
@@ -230,11 +251,11 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
-              )
+              );
             })}
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }

@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { ArrowLeft, Send, Trash2, Download } from "lucide-react";
+import {
+  ArrowLeft,
+  Send,
+  Trash2,
+  Download,
+  Bell,
+} from "lucide-react";
 
 import { auth } from "@/lib/firebase";
 import {
@@ -12,10 +18,16 @@ import {
   sendMessage,
   subscribeToMessages,
   sendLockedImage,
+  clearChatMessagesClient,
+  sendNudge,
+  subscribeToBrowserNudges,
+  subscribeToNudges,
+  setUserOnline,
+  setUserOffline,
+  subscribeToPresence,
   type UserProfile,
   type Chat,
   type Message,
-  clearChatMessagesClient,
 } from "@/lib/firebase-utils";
 
 import { decryptImage } from "@/lib/crypto/imageCrypto";
@@ -26,6 +38,34 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
+/* ================= TIME FORMAT (SAFE) ================= */
+
+function formatTimeHHmm(ts?: any) {
+  if (!ts) return "";
+
+  const d =
+    typeof ts.toDate === "function"
+      ? ts.toDate() // Firestore Timestamp
+      : ts instanceof Date
+      ? ts // optimistic Date
+      : null;
+
+  if (!d) return "";
+
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+
+  return `${hh}:${mm}`;
+}
+
+/* ================= TYPES ================= */
+
+type UIMessage = Message & {
+  _optimistic?: boolean;
+};
+
+/* ================= COMPONENT ================= */
+
 export default function ChatConversationPage() {
   const { id: chatId } = useParams<{ id: string }>();
   const router = useRouter();
@@ -34,20 +74,24 @@ export default function ChatConversationPage() {
   const [chat, setChat] = useState<Chat | null>(null);
   const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<UIMessage[]>([]);
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
 
-  const [decryptedImages, setDecryptedImages] = useState<
-    Record<string, string>
-  >({});
+  const [isOnline, setIsOnline] = useState(false);
+  const [lastSeen, setLastSeen] = useState<any>(null);
+
+  const [nudgeFrom, setNudgeFrom] = useState<string | null>(null);
+  const [lastNudgeAt, setLastNudgeAt] = useState(0);
+
+  const [decryptedImages, setDecryptedImages] = useState<Record<string, string>>(
+    {}
+  );
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
   const [clickCounts, setClickCounts] = useState<Record<string, number>>({});
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ================= AUTH ================= */
 
@@ -61,71 +105,121 @@ export default function ChatConversationPage() {
     });
   }, [router]);
 
+  /* ================= PRESENCE ================= */
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    setUserOnline(currentUser.id);
+
+    const goOffline = () => setUserOffline(currentUser.id);
+
+    window.addEventListener("beforeunload", goOffline);
+    document.addEventListener("visibilitychange", () => {
+      document.hidden ? goOffline() : setUserOnline(currentUser.id);
+    });
+
+    return () => {
+      goOffline();
+      window.removeEventListener("beforeunload", goOffline);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!otherUser) return;
+
+    return subscribeToPresence(otherUser.id, (p) => {
+      setIsOnline(p.online);
+      setLastSeen(p.lastSeen);
+    });
+  }, [otherUser]);
+
   /* ================= LOAD CHAT ================= */
 
   useEffect(() => {
     if (!currentUser || !chatId) return;
 
-    const load = async () => {
+    (async () => {
       const chatData = await getChatDetails(chatId);
       if (!chatData) {
         router.push("/chat");
         return;
       }
+
       setChat(chatData);
-
-      const otherId = chatData.participants.find((id) => id !== currentUser.id);
+      const otherId = chatData.participants.find(
+        (id) => id !== currentUser.id
+      );
       if (otherId) setOtherUser(await getUserProfile(otherId));
-    };
-
-    load();
+    })();
   }, [currentUser, chatId, router]);
 
-  /* ================= SUBSCRIBE ================= */
+  /* ================= MESSAGES ================= */
 
   useEffect(() => {
     if (!chatId) return;
+
     return subscribeToMessages(chatId, (msgs) => {
-      setMessages(msgs);
-      scrollToBottom();
+      setMessages(msgs as UIMessage[]);
     });
   }, [chatId]);
 
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 0);
-  };
+  /* ================= NUDGES ================= */
 
-  /* ================= SEND TEXT ================= */
+  useEffect(() => {
+    if (!chat || !currentUser) return;
+
+    return subscribeToNudges(chat.id, currentUser.id, (from) => {
+      setNudgeFrom(from);
+      if (navigator.vibrate) navigator.vibrate(200);
+      setTimeout(() => setNudgeFrom(null), 3000);
+    });
+  }, [chat, currentUser]);
+
+  useEffect(() => {
+    if (!chat || !currentUser || !otherUser) return;
+
+    return subscribeToBrowserNudges(chat.id, currentUser.id, () => {
+      if (Notification.permission === "granted") {
+        new Notification("👋 Nudge", {
+          body: `${otherUser.name} wants to chat`,
+        });
+      }
+    });
+  }, [chat, currentUser, otherUser]);
+
+  /* ================= ACTIONS ================= */
 
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim() || !currentUser || !chat || sending) return;
+    if (!text.trim() || !currentUser || !chat) return;
 
-    setSending(true);
-    await sendMessage(chat.id, currentUser.id, text.trim());
+    const optimistic: UIMessage = {
+      id: `tmp-${Date.now()}`,
+      senderId: currentUser.id,
+      text,
+      type: "text",
+      timestamp: new Date() as any,
+      _optimistic: true,
+    };
+
+    setMessages((p) => [...p, optimistic]);
     setText("");
-    setSending(false);
     inputRef.current?.focus();
-  };
 
-  /* ================= SEND IMAGE ================= */
+    await sendMessage(chat.id, currentUser.id, optimistic.text!);
+  };
 
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !chat || !currentUser) return;
 
-    const password = prompt("Set password for this image");
+    const password = prompt("Set password for image");
     if (!password) return;
 
-    setSending(true);
     await sendLockedImage(chat.id, currentUser.id, file, password);
-    setSending(false);
     e.target.value = "";
   };
-
-  /* ================= UNLOCK IMAGE ================= */
 
   const unlockImage = async (password: string) => {
     if (!selectedMessage || !chat) return;
@@ -143,30 +237,31 @@ export default function ChatConversationPage() {
       password
     );
 
-    setDecryptedImages((prev) => ({
-      ...prev,
-      [selectedMessage.id]: url,
-    }));
+    setDecryptedImages((p) => ({ ...p, [selectedMessage.id]: url }));
     setShowPasswordModal(false);
   };
 
-  /* ================= CLEAR CHAT (UI ONLY) ================= */
-
   const clearChatUI = async () => {
-    if (
-      !confirm(
-        "This will permanently delete all messages for both users. Continue?"
-      )
-    )
-      return;
-
+    if (!confirm("Delete all messages for everyone?")) return;
     await clearChatMessagesClient(chatId);
-    if (!confirm("Clear chat for this session?")) return;
     setMessages([]);
     setDecryptedImages({});
   };
 
-  if (!currentUser || !chat || !otherUser) return null;
+  const handleNudge = async () => {
+    const now = Date.now();
+    if (now - lastNudgeAt < 10000) return;
+    if (!chat || !currentUser || !otherUser) return;
+
+    setLastNudgeAt(now);
+    await sendNudge(chat.id, currentUser.id, otherUser.id);
+  };
+
+  /* ================= RENDER ================= */
+
+  if (!currentUser || !chat || !otherUser) {
+    return <div className="flex h-dvh items-center justify-center">Loading…</div>;
+  }
 
   const initials = (name: string) =>
     name
@@ -177,35 +272,46 @@ export default function ChatConversationPage() {
       .toUpperCase();
 
   return (
-    <div className="flex h-screen flex-col bg-background">
-      {/* ================= HEADER ================= */}
+    <div className="grid h-dvh grid-rows-[auto,1fr,auto] bg-background">
+      {/* HEADER */}
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => router.push("/chat")}
-          >
+          <Button variant="ghost" size="icon" onClick={() => router.push("/chat")}>
             <ArrowLeft />
           </Button>
           <Avatar>
             <AvatarFallback>{initials(otherUser.name)}</AvatarFallback>
           </Avatar>
-          <div className="font-semibold">{otherUser.name}</div>
+          <div>
+            <div className="font-semibold">{otherUser.name}</div>
+            <div className="text-xs text-muted-foreground">
+              {isOnline
+                ? "Online"
+                : lastSeen
+                ? `Last seen ${lastSeen.toDate().toLocaleTimeString()}`
+                : "Offline"}
+            </div>
+          </div>
         </div>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Clear chat"
-          onClick={clearChatUI}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="icon" onClick={clearChatUI}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={handleNudge}>
+            <Bell className="h-4 w-4" />
+          </Button>
+        </div>
       </header>
 
-      {/* ================= MESSAGES ================= */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      {nudgeFrom && (
+        <div className="mx-4 my-2 rounded bg-yellow-100 px-3 py-2 text-sm">
+          👋 {otherUser.name} nudged you
+        </div>
+      )}
+
+      {/* MESSAGES */}
+      <div className="overflow-y-auto px-4 py-3 space-y-4">
         {messages.map((msg) => {
           const isOwn = msg.senderId === currentUser.id;
 
@@ -214,7 +320,7 @@ export default function ChatConversationPage() {
               key={msg.id}
               className={`flex ${isOwn ? "justify-end" : "justify-start"}`}
             >
-              <div className="max-w-[75%] rounded-xl bg-muted px-4 py-2 space-y-1">
+              <div className="max-w-[75%] rounded-xl bg-muted px-4 py-2">
                 {msg.type === "image" ? (
                   decryptedImages[msg.id] ? (
                     <>
@@ -222,56 +328,65 @@ export default function ChatConversationPage() {
                         src={decryptedImages[msg.id]}
                         className="rounded-lg max-w-xs"
                       />
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="flex gap-1"
-                        onClick={() => {
-                          const a = document.createElement("a");
-                          a.href = decryptedImages[msg.id];
-                          a.download = "image";
-                          a.click();
-                        }}
-                      >
-                        <Download className="h-4 w-4" />
-                        Download
-                      </Button>
+                      <div className="mt-1 flex justify-end gap-1 text-[10px] text-muted-foreground">
+                        <span>{formatTimeHHmm(msg.timestamp)}</span>
+                        {isOwn && <span>✓✓</span>}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => {
+                            const a = document.createElement("a");
+                            a.href = decryptedImages[msg.id];
+                            a.download = "image";
+                            a.click();
+                          }}
+                        >
+                          <Download className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </>
                   ) : (
                     <div
-                      className="cursor-pointer select-none text-4xl"
+                      className="cursor-pointer text-4xl select-none"
                       onClick={() => {
-                        setClickCounts((prev) => {
-                          const count = (prev[msg.id] ?? 0) + 1;
-                          if (count === 3) {
+                        setClickCounts((p) => {
+                          const c = (p[msg.id] ?? 0) + 1;
+                          if (c === 3) {
                             setSelectedMessage(msg);
                             setShowPasswordModal(true);
-                            return { ...prev, [msg.id]: 0 };
+                            return { ...p, [msg.id]: 0 };
                           }
-                          return { ...prev, [msg.id]: count };
+                          return { ...p, [msg.id]: c };
                         });
                       }}
                     >
-                      😩
+                      😂😂😂
                     </div>
                   )
                 ) : (
-                  <p>{msg.text}</p>
+                  <>
+                    <p>{msg.text}</p>
+                    <div className="mt-1 flex justify-end gap-1 text-[10px] text-muted-foreground">
+                      <span>{formatTimeHHmm(msg.timestamp)}</span>
+                      {isOwn && (
+                        <span>{msg._optimistic ? "✓" : "✓✓"}</span>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
       </div>
 
-      {/* ================= INPUT (FIXED BOTTOM) ================= */}
-      <div className="sticky bottom-0 border-t bg-background px-4 py-3">
+      {/* INPUT */}
+      <footer className="border-t px-4 py-3">
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
           hidden
+          accept="image/*"
           onChange={handleImagePick}
         />
 
@@ -291,11 +406,11 @@ export default function ChatConversationPage() {
             placeholder="Type a message"
           />
 
-          <Button type="submit" disabled={!text.trim() || sending}>
+          <Button type="submit">
             <Send />
           </Button>
         </form>
-      </div>
+      </footer>
 
       {showPasswordModal && (
         <PasswordModal
